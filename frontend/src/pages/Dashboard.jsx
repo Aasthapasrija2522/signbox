@@ -5,7 +5,13 @@ function Dashboard() {
   const [documents, setDocuments] = useState([]);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/documents')
+    const token = localStorage.getItem('token');
+
+    fetch('http://127.0.0.1:8000/documents', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
       .then((res) => res.json())
       .then((data) => setDocuments(data));
   }, []);

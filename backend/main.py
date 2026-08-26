@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from database import engine, Base, get_db
 import models
 from auth import hash_password, verify_password
+from auth import create_access_token
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
 
 
 Base.metadata.create_all(bind=engine)
@@ -126,4 +129,22 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     if not user or not verify_password(credentials.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    return {"message": "Login successful", "user_id": user.id}
+    token = create_access_token({"sub": str(user.id)})
+    return {"access_token": token, "token_type": "bearer"}
+security = HTTPBearer()
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    token = credentials.credentials
+    payload = decode_access_token(token)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user_id = int(payload.get("sub"))
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
+@app.get("/auth/me")
+def get_me(current_user: models.User = Depends(get_current_user)):
+    return {"id": current_user.id, "email": current_user.email}
