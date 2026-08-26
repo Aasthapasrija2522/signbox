@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from database import engine, Base, get_db
 import models
+from auth import hash_password, verify_password
 
 
 Base.metadata.create_all(bind=engine)
@@ -27,13 +28,20 @@ def read_root():
     return {"message": "SignBox API running"}
 
 
+# =========================
+# DOCUMENT APIs
+# =========================
+
 @app.get("/documents")
 def get_documents(db: Session = Depends(get_db)):
     return db.query(models.Document).all()
 
 
 @app.get("/documents/{document_id}")
-def get_document(document_id: int, db: Session = Depends(get_db)):
+def get_document(
+    document_id: int,
+    db: Session = Depends(get_db)
+):
     doc = db.query(models.Document).filter(
         models.Document.id == document_id
     ).first()
@@ -69,3 +77,53 @@ def create_document(
     db.refresh(new_doc)
 
     return new_doc
+
+
+# =========================
+# AUTH APIs
+# =========================
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/auth/register")
+def register(
+    user: UserCreate,
+    db: Session = Depends(get_db)
+):
+    existing_user = db.query(models.User).filter(
+        models.User.email == user.email
+    ).first()
+
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    new_user = models.User(
+        email=user.email,
+        hashed_password=hash_password(user.password)
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "id": new_user.id,
+        "email": new_user.email
+    }
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+@app.post("/auth/login")
+def login(credentials: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == credentials.email).first()
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    return {"message": "Login successful", "user_id": user.id}
