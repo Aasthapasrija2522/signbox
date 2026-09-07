@@ -1,6 +1,12 @@
-import { useRef, useState } from 'react';
 
-function SignaturePad() {
+import {
+    forwardRef,
+    useImperativeHandle,
+    useRef,
+    useState
+} from 'react';
+
+const SignaturePad = forwardRef((props, ref) => {
     console.log("SIGNATURE PAD RENDERED");
 
     const canvasRef = useRef(null);
@@ -114,6 +120,12 @@ function SignaturePad() {
         stopDrawing();
     }
 
+    // Expose selected functions to the parent component
+    useImperativeHandle(ref, () => ({
+        getSignatureData,
+        clearCanvas
+    }));
+
     return (
         <div className="flex flex-col items-start">
 
@@ -148,17 +160,11 @@ function SignaturePad() {
                     Clear
                 </button>
 
-                <button
-                    onClick={getSignatureData}
-                    className="px-4 py-2 bg-blue-600 text-white rounded"
-                >
-                    Get Signature Data
-                </button>
-
             </div>
 
         </div>
     );
-}
+});
 
 export default SignaturePad;
+

@@ -7,18 +7,28 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from database import engine, Base, get_db
 import models
+
 from auth import hash_password, verify_password
 from auth import create_access_token, decode_access_token
 
 
+# =========================================================
+# DATABASE
+# =========================================================
+
 Base.metadata.create_all(bind=engine)
+
+
+# =========================================================
+# FASTAPI APP
+# =========================================================
 
 app = FastAPI()
 
 
-# =========================
-# CORS CONFIGURATION
-# =========================
+# =========================================================
+# CORS
+# =========================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,92 +39,56 @@ app.add_middleware(
 )
 
 
-# =========================
+# =========================================================
 # ROOT API
-# =========================
+# =========================================================
 
 @app.get("/")
 def read_root():
-    return {"message": "SignBox API running"}
+    return {
+        "message": "SignBox API running"
+    }
 
 
-# =========================
-# DOCUMENT APIs
-# =========================
+# =========================================================
+# AUTHENTICATION
+# =========================================================
 
-@app.get("/documents")
-def get_documents(db: Session = Depends(get_db)):
-    return db.query(models.Document).all()
+security = HTTPBearer()
 
 
-@app.get("/documents/{document_id}")
-def get_document(
-    document_id: int,
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
-    doc = db.query(models.Document).filter(
-        models.Document.id == document_id
-    ).first()
+    token = credentials.credentials
 
-    if not doc:
+    payload = decode_access_token(token)
+
+    if payload is None:
         raise HTTPException(
-            status_code=404,
-            detail="Document not found"
+            status_code=401,
+            detail="Invalid or expired token"
         )
 
-    return doc
+    user_id = int(payload.get("sub"))
 
-
-# TODO: restrict access — owner via JWT, signer via signing token (Day 16)
-
-@app.get("/documents/{document_id}/file")
-def get_document_file(
-    document_id: int,
-    db: Session = Depends(get_db)
-):
-    doc = db.query(models.Document).filter(
-        models.Document.id == document_id
+    user = db.query(models.User).filter(
+        models.User.id == user_id
     ).first()
 
-    if not doc:
+    if not user:
         raise HTTPException(
-            status_code=404,
-            detail="Document not found"
+            status_code=401,
+            detail="User not found"
         )
 
-    return FileResponse(
-        doc.file_path,
-        media_type="application/pdf"
-    )
+    return user
 
 
-class DocumentCreate(BaseModel):
-    title: str
-    file_path: str
-    owner_id: int
-
-
-@app.post("/documents")
-def create_document(
-    document: DocumentCreate,
-    db: Session = Depends(get_db)
-):
-    new_doc = models.Document(
-        title=document.title,
-        file_path=document.file_path,
-        owner_id=document.owner_id
-    )
-
-    db.add(new_doc)
-    db.commit()
-    db.refresh(new_doc)
-
-    return new_doc
-
-
-# =========================
-# AUTH APIs
-# =========================
+# =========================================================
+# REGISTER
+# =========================================================
 
 class UserCreate(BaseModel):
     email: str
@@ -151,6 +125,10 @@ def register(
     }
 
 
+# =========================================================
+# LOGIN
+# =========================================================
+
 class UserLogin(BaseModel):
     email: str
     password: str
@@ -184,41 +162,9 @@ def login(
     }
 
 
-# =========================
-# AUTHENTICATION
-# =========================
-
-security = HTTPBearer()
-
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
-):
-    token = credentials.credentials
-
-    payload = decode_access_token(token)
-
-    if payload is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired token"
-        )
-
-    user_id = int(payload.get("sub"))
-
-    user = db.query(models.User).filter(
-        models.User.id == user_id
-    ).first()
-
-    if not user:
-        raise HTTPException(
-            status_code=401,
-            detail="User not found"
-        )
-
-    return user
-
+# =========================================================
+# CURRENT USER
+# =========================================================
 
 @app.get("/auth/me")
 def get_me(
@@ -227,4 +173,331 @@ def get_me(
     return {
         "id": current_user.id,
         "email": current_user.email
+    }
+
+
+# =========================================================
+# GET ALL DOCUMENTS
+# =========================================================
+
+@app.get("/documents")
+def get_documents(
+    db: Session = Depends(get_db)
+):
+    return db.query(models.Document).all()
+
+
+# =========================================================
+# GET SINGLE DOCUMENT
+# =========================================================
+
+@app.get("/documents/{document_id}")
+def get_document(
+    document_id: int,
+    db: Session = Depends(get_db)
+):
+    doc = db.query(models.Document).filter(
+        models.Document.id == document_id
+    ).first()
+
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    return doc
+
+
+# =========================================================
+# GET DOCUMENT PDF
+# =========================================================
+
+@app.get("/documents/{document_id}/file")
+def get_document_file(
+    document_id: int,
+    db: Session = Depends(get_db)
+):
+    doc = db.query(models.Document).filter(
+        models.Document.id == document_id
+    ).first()
+
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    return FileResponse(
+        doc.file_path,
+        media_type="application/pdf"
+    )
+
+
+# =========================================================
+# CREATE DOCUMENT
+# =========================================================
+
+class DocumentCreate(BaseModel):
+    title: str
+    file_path: str
+    owner_id: int
+
+
+@app.post("/documents")
+def create_document(
+    document: DocumentCreate,
+    db: Session = Depends(get_db)
+):
+    new_doc = models.Document(
+        title=document.title,
+        file_path=document.file_path,
+        owner_id=document.owner_id
+    )
+
+    db.add(new_doc)
+    db.commit()
+    db.refresh(new_doc)
+
+    return new_doc
+
+
+# =========================================================
+# CREATE SIGNING REQUEST
+# =========================================================
+
+class SigningRequestCreate(BaseModel):
+    signer_email: str
+
+
+@app.post("/documents/{document_id}/signing-request")
+def create_signing_request(
+    document_id: int,
+    request_data: SigningRequestCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+
+    # Find document
+    doc = db.query(models.Document).filter(
+        models.Document.id == document_id
+    ).first()
+
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    # Debug information
+    print("====================================")
+    print("DOCUMENT OWNER:", doc.owner_id)
+    print("CURRENT USER:", current_user.id)
+    print("====================================")
+
+    # Check ownership
+    if doc.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't own this document"
+        )
+
+    # Create signing request
+    new_request = models.SigningRequest(
+        document_id=document_id,
+        signer_email=request_data.signer_email
+    )
+
+    db.add(new_request)
+    db.commit()
+    db.refresh(new_request)
+
+    # Update document status
+    doc.status = "Pending"
+
+    db.commit()
+
+    print("SIGNING REQUEST CREATED:", new_request.id)
+    print("SIGNING TOKEN:", new_request.token)
+
+    return {
+        "signing_request_id": new_request.id,
+        "signing_link": (
+            f"http://localhost:5173/sign/{new_request.token}"
+        )
+    }
+
+
+# =========================================================
+# GET SIGNING INFORMATION
+# =========================================================
+
+@app.get("/sign/{token}")
+def get_signing_info(
+    token: str,
+    db: Session = Depends(get_db)
+):
+
+    # Find signing request
+    signing_request = db.query(
+        models.SigningRequest
+    ).filter(
+        models.SigningRequest.token == token
+    ).first()
+
+    if not signing_request:
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid or expired signing link"
+        )
+
+    # Find document
+    document = db.query(
+        models.Document
+    ).filter(
+        models.Document.id == signing_request.document_id
+    ).first()
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    # Pending -> Viewed
+    if signing_request.status == "Pending":
+        signing_request.status = "Viewed"
+        db.commit()
+
+    print("SIGNING REQUEST STATUS:", signing_request.status)
+
+    return {
+        "document_title": document.title,
+        "status": signing_request.status,
+        "signer_email": signing_request.signer_email
+    }
+
+
+# =========================================================
+# GET SIGNING PDF
+# =========================================================
+
+@app.get("/sign/{token}/file")
+def get_signing_file(
+    token: str,
+    db: Session = Depends(get_db)
+):
+
+    # Find signing request
+    signing_request = db.query(
+        models.SigningRequest
+    ).filter(
+        models.SigningRequest.token == token
+    ).first()
+
+    if not signing_request:
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid signing link"
+        )
+
+    # Find document
+    document = db.query(
+        models.Document
+    ).filter(
+        models.Document.id == signing_request.document_id
+    ).first()
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    return FileResponse(
+        document.file_path,
+        media_type="application/pdf"
+    )
+
+
+# =========================================================
+# SUBMIT SIGNATURE
+# =========================================================
+
+class SignatureSubmit(BaseModel):
+    image_data: str
+
+
+@app.post("/sign/{token}")
+def submit_signature(
+    token: str,
+    signature: SignatureSubmit,
+    db: Session = Depends(get_db)
+):
+
+    # Find signing request
+    signing_request = db.query(
+        models.SigningRequest
+    ).filter(
+        models.SigningRequest.token == token
+    ).first()
+
+    if not signing_request:
+        raise HTTPException(
+            status_code=404,
+            detail="Invalid signing link"
+        )
+
+    # Find document
+    document = db.query(
+        models.Document
+    ).filter(
+        models.Document.id == signing_request.document_id
+    ).first()
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    # Check if already signed
+    if signing_request.status == "Signed":
+        raise HTTPException(
+            status_code=400,
+            detail="Document already signed"
+        )
+
+    # Make sure signature data was received
+    if not signature.image_data:
+        raise HTTPException(
+            status_code=400,
+            detail="Signature is required"
+        )
+
+    # =====================================================
+    # SIGNATURE RECEIVED
+    # =====================================================
+
+    print("====================================")
+    print("SIGNATURE RECEIVED")
+    print("SIGNING REQUEST:", signing_request.id)
+    print("DOCUMENT:", document.id)
+    print("====================================")
+
+    # =====================================================
+    # UPDATE STATUS
+    # =====================================================
+
+    signing_request.status = "Signed"
+    document.status = "Signed"
+
+    db.commit()
+
+    print("DOCUMENT STATUS: Signed")
+    print("SIGNING REQUEST STATUS: Signed")
+
+    return {
+        "message": "Document signed successfully",
+        "status": "Signed"
     }
