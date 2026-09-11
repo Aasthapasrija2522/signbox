@@ -1,9 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+import os
 
 from database import engine, Base, get_db
 import models
@@ -11,12 +14,25 @@ import models
 from auth import hash_password, verify_password
 from auth import create_access_token, decode_access_token
 
+from pdf_utils import stamp_signature
+
 
 # =========================================================
 # DATABASE
 # =========================================================
 
 Base.metadata.create_all(bind=engine)
+
+
+# =========================================================
+# DIRECTORIES
+# =========================================================
+
+SIGNED_DIR = "signed"
+UPLOAD_DIR = "uploads"
+
+os.makedirs(SIGNED_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 # =========================================================
@@ -177,14 +193,102 @@ def get_me(
 
 
 # =========================================================
-# GET ALL DOCUMENTS
+# GET CURRENT USER'S DOCUMENTS
 # =========================================================
 
 @app.get("/documents")
 def get_documents(
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return db.query(models.Document).all()
+    documents = db.query(models.Document).filter(
+        models.Document.owner_id == current_user.id
+    ).all()
+
+    return documents
+
+
+# =========================================================
+# UPLOAD DOCUMENT
+# =========================================================
+
+@app.post("/documents/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are allowed"
+        )
+
+    # Give every uploaded file a user-specific filename
+    # so different users cannot overwrite files having
+    # the same original filename.
+    safe_filename = f"{current_user.id}_{file.filename}"
+
+    file_path = os.path.join(
+        UPLOAD_DIR,
+        safe_filename
+    )
+
+    contents = await file.read()
+
+    with open(file_path, "wb") as buffer:
+        buffer.write(contents)
+
+    new_doc = models.Document(
+        title=file.filename,
+        file_path=file_path,
+        owner_id=current_user.id
+    )
+
+    db.add(new_doc)
+    db.commit()
+    db.refresh(new_doc)
+
+    print("====================================")
+    print("DOCUMENT UPLOADED")
+    print("DOCUMENT ID:", new_doc.id)
+    print("FILE:", file.filename)
+    print("OWNER:", current_user.id)
+    print("====================================")
+
+    return {
+        "message": "Document uploaded successfully",
+        "document": new_doc
+    }
+
+
+# =========================================================
+# CREATE DOCUMENT
+# =========================================================
+
+class DocumentCreate(BaseModel):
+    title: str
+    file_path: str
+
+
+@app.post("/documents")
+def create_document(
+    document: DocumentCreate,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    new_doc = models.Document(
+        title=document.title,
+        file_path=document.file_path,
+        owner_id=current_user.id
+    )
+
+    db.add(new_doc)
+    db.commit()
+    db.refresh(new_doc)
+
+    return new_doc
 
 
 # =========================================================
@@ -194,10 +298,12 @@ def get_documents(
 @app.get("/documents/{document_id}")
 def get_document(
     document_id: int,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     doc = db.query(models.Document).filter(
-        models.Document.id == document_id
+        models.Document.id == document_id,
+        models.Document.owner_id == current_user.id
     ).first()
 
     if not doc:
@@ -216,10 +322,12 @@ def get_document(
 @app.get("/documents/{document_id}/file")
 def get_document_file(
     document_id: int,
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     doc = db.query(models.Document).filter(
-        models.Document.id == document_id
+        models.Document.id == document_id,
+        models.Document.owner_id == current_user.id
     ).first()
 
     if not doc:
@@ -232,34 +340,6 @@ def get_document_file(
         doc.file_path,
         media_type="application/pdf"
     )
-
-
-# =========================================================
-# CREATE DOCUMENT
-# =========================================================
-
-class DocumentCreate(BaseModel):
-    title: str
-    file_path: str
-    owner_id: int
-
-
-@app.post("/documents")
-def create_document(
-    document: DocumentCreate,
-    db: Session = Depends(get_db)
-):
-    new_doc = models.Document(
-        title=document.title,
-        file_path=document.file_path,
-        owner_id=document.owner_id
-    )
-
-    db.add(new_doc)
-    db.commit()
-    db.refresh(new_doc)
-
-    return new_doc
 
 
 # =========================================================
@@ -278,9 +358,9 @@ def create_signing_request(
     db: Session = Depends(get_db)
 ):
 
-    # Find document
     doc = db.query(models.Document).filter(
-        models.Document.id == document_id
+        models.Document.id == document_id,
+        models.Document.owner_id == current_user.id
     ).first()
 
     if not doc:
@@ -289,20 +369,11 @@ def create_signing_request(
             detail="Document not found"
         )
 
-    # Debug information
     print("====================================")
     print("DOCUMENT OWNER:", doc.owner_id)
     print("CURRENT USER:", current_user.id)
     print("====================================")
 
-    # Check ownership
-    if doc.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="You don't own this document"
-        )
-
-    # Create signing request
     new_request = models.SigningRequest(
         document_id=document_id,
         signer_email=request_data.signer_email
@@ -312,7 +383,6 @@ def create_signing_request(
     db.commit()
     db.refresh(new_request)
 
-    # Update document status
     doc.status = "Pending"
 
     db.commit()
@@ -338,7 +408,6 @@ def get_signing_info(
     db: Session = Depends(get_db)
 ):
 
-    # Find signing request
     signing_request = db.query(
         models.SigningRequest
     ).filter(
@@ -351,7 +420,6 @@ def get_signing_info(
             detail="Invalid or expired signing link"
         )
 
-    # Find document
     document = db.query(
         models.Document
     ).filter(
@@ -364,12 +432,14 @@ def get_signing_info(
             detail="Document not found"
         )
 
-    # Pending -> Viewed
     if signing_request.status == "Pending":
         signing_request.status = "Viewed"
         db.commit()
 
-    print("SIGNING REQUEST STATUS:", signing_request.status)
+    print(
+        "SIGNING REQUEST STATUS:",
+        signing_request.status
+    )
 
     return {
         "document_title": document.title,
@@ -388,7 +458,6 @@ def get_signing_file(
     db: Session = Depends(get_db)
 ):
 
-    # Find signing request
     signing_request = db.query(
         models.SigningRequest
     ).filter(
@@ -401,7 +470,6 @@ def get_signing_file(
             detail="Invalid signing link"
         )
 
-    # Find document
     document = db.query(
         models.Document
     ).filter(
@@ -435,7 +503,6 @@ def submit_signature(
     db: Session = Depends(get_db)
 ):
 
-    # Find signing request
     signing_request = db.query(
         models.SigningRequest
     ).filter(
@@ -448,7 +515,6 @@ def submit_signature(
             detail="Invalid signing link"
         )
 
-    # Find document
     document = db.query(
         models.Document
     ).filter(
@@ -461,39 +527,59 @@ def submit_signature(
             detail="Document not found"
         )
 
-    # Check if already signed
     if signing_request.status == "Signed":
         raise HTTPException(
             status_code=400,
             detail="Document already signed"
         )
 
-    # Make sure signature data was received
     if not signature.image_data:
         raise HTTPException(
             status_code=400,
             detail="Signature is required"
         )
 
-    # =====================================================
-    # SIGNATURE RECEIVED
-    # =====================================================
-
     print("====================================")
     print("SIGNATURE RECEIVED")
     print("SIGNING REQUEST:", signing_request.id)
     print("DOCUMENT:", document.id)
+    print("DOCUMENT OWNER:", document.owner_id)
     print("====================================")
 
+    new_signature = models.Signature(
+        signing_request_id=signing_request.id,
+        image_data=signature.image_data
+    )
+
+    db.add(new_signature)
+    db.flush()
+
     # =====================================================
-    # UPDATE STATUS
+    # TEMPORARY TEST POSITION
+    # Signature placed on page 1 at bottom-left
     # =====================================================
+
+    signed_output_path = (
+        f"{SIGNED_DIR}/signed_{document.id}.pdf"
+    )
+
+    stamp_signature(
+        original_pdf_path=document.file_path,
+        image_data=new_signature.image_data,
+        page_number=1,
+        x=50,
+        y=50,
+        output_path=signed_output_path
+    )
+
+    document.signed_file_path = signed_output_path
 
     signing_request.status = "Signed"
     document.status = "Signed"
 
     db.commit()
 
+    print("SIGNED PDF CREATED:", signed_output_path)
     print("DOCUMENT STATUS: Signed")
     print("SIGNING REQUEST STATUS: Signed")
 
@@ -501,3 +587,45 @@ def submit_signature(
         "message": "Document signed successfully",
         "status": "Signed"
     }
+
+
+# =========================================================
+# DOWNLOAD SIGNED PDF
+# =========================================================
+
+@app.get("/documents/{document_id}/signed-file")
+def get_signed_file(
+    document_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+
+    doc = db.query(models.Document).filter(
+        models.Document.id == document_id,
+        models.Document.owner_id == current_user.id
+    ).first()
+
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
+
+    if not doc.signed_file_path:
+        raise HTTPException(
+            status_code=400,
+            detail="Document has not been signed yet"
+        )
+
+    if not os.path.exists(doc.signed_file_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Signed PDF file not found"
+        )
+
+    return FileResponse(
+        doc.signed_file_path,
+        media_type="application/pdf",
+        filename=f"{doc.title}_signed.pdf"
+    )
+

@@ -1,111 +1,319 @@
-
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import SignaturePad from '../components/SignaturePad';
 
 function DocumentDetails() {
-  console.log("DOCUMENT DETAILS RENDERED");
+  console.log('DOCUMENT DETAILS RENDERED');
 
   const { id } = useParams();
 
   const [document, setDocument] = useState(null);
+  const [pdfUrl, setPdfUrl] = useState(null);
 
-  // Step 6: signer email and signing link
   const [signerEmail, setSignerEmail] = useState('');
   const [signingLink, setSigningLink] = useState('');
+
+  // =========================================================
+  // FETCH DOCUMENT DETAILS
+  // =========================================================
 
   useEffect(() => {
     const token = localStorage.getItem('token');
 
-    fetch(`http://127.0.0.1:8000/documents/${id}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-      .then((res) => res.json())
-      .then((data) => setDocument(data));
+    const fetchDocument = async () => {
+      try {
+        const response = await fetch(
+          `http://127.0.0.1:8000/documents/${id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Failed to fetch document: ${response.status}`
+          );
+        }
+
+        const data = await response.json();
+
+        console.log('DOCUMENT:', data);
+
+        setDocument(data);
+
+      } catch (error) {
+        console.error(
+          'Error fetching document:',
+          error
+        );
+      }
+    };
+
+    fetchDocument();
+
   }, [id]);
 
-  // Send document for signature
-  async function handleSendForSignature(e) {
-    e.preventDefault();
+
+  // =========================================================
+  // FETCH PDF
+  // =========================================================
+
+  useEffect(() => {
+    if (!document) {
+      return;
+    }
 
     const token = localStorage.getItem('token');
 
+    const fetchPdf = async () => {
+      try {
+
+        // If document is signed,
+        // load the signed PDF.
+        //
+        // Otherwise,
+        // load the original PDF.
+
+        const pdfEndpoint =
+          document.status === 'Signed'
+            ? `http://127.0.0.1:8000/documents/${id}/signed-file`
+            : `http://127.0.0.1:8000/documents/${id}/file`;
+
+        console.log(
+          'PDF ENDPOINT:',
+          pdfEndpoint
+        );
+
+        const response = await fetch(
+          pdfEndpoint,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          const errorText =
+            await response.text();
+
+          throw new Error(
+            `PDF request failed: ${response.status} ${errorText}`
+          );
+        }
+
+        const blob =
+          await response.blob();
+
+        console.log(
+          'PDF TYPE:',
+          blob.type
+        );
+
+        console.log(
+          'PDF SIZE:',
+          blob.size
+        );
+
+        const url =
+          URL.createObjectURL(blob);
+
+        setPdfUrl(url);
+
+      } catch (error) {
+        console.error(
+          'Error loading PDF:',
+          error
+        );
+      }
+    };
+
+    fetchPdf();
+
+  }, [id, document]);
+
+
+  // =========================================================
+  // SEND DOCUMENT FOR SIGNATURE
+  // =========================================================
+
+  async function handleSendForSignature(e) {
+    e.preventDefault();
+
+    const token =
+      localStorage.getItem('token');
+
     try {
-      const res = await fetch(
+
+      const response = await fetch(
         `http://127.0.0.1:8000/documents/${id}/signing-request`,
         {
           method: 'POST',
+
           headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
+            'Content-Type':
+              'application/json',
+
+            Authorization:
+              `Bearer ${token}`,
           },
+
           body: JSON.stringify({
-            signer_email: signerEmail,
+            signer_email:
+              signerEmail,
           }),
         }
       );
 
-      const data = await res.json();
+      const data =
+        await response.json();
 
-      if (res.ok) {
-        console.log('Signing request sent successfully');
+      if (response.ok) {
 
-        // Display signing link returned by backend
-        setSigningLink(data.signing_link);
+        console.log(
+          'Signing request sent successfully'
+        );
+
+        setSigningLink(
+          data.signing_link
+        );
+
+        alert(
+          'Signing request created successfully!'
+        );
+
       } else {
-        console.log('Submission failed:', data);
+
+        console.log(
+          'Submission failed:',
+          data
+        );
+
+        alert(
+          data.detail ||
+          'Failed to create signing request'
+        );
       }
+
     } catch (error) {
-      console.log('Error sending signing request:', error);
+
+      console.error(
+        'Error sending signing request:',
+        error
+      );
+
+      alert(
+        'Unable to connect to server'
+      );
     }
   }
 
+
+  // =========================================================
+  // LOADING DOCUMENT
+  // =========================================================
+
   if (!document) {
-    return <p>Loading...</p>;
+    return (
+      <p className="text-center mt-20">
+        Loading...
+      </p>
+    );
   }
+
+
+  // =========================================================
+  // PAGE
+  // =========================================================
 
   return (
     <div className="max-w-3xl mx-auto mt-10">
 
-      {/* Document title */}
+      {/* =====================================================
+          DOCUMENT TITLE
+      ===================================================== */}
+
       <h1 className="text-2xl font-bold">
         {document.title}
       </h1>
 
-      {/* Document status */}
+
+      {/* =====================================================
+          STATUS
+      ===================================================== */}
+
       <p className="text-gray-500 mb-4">
         Status: {document.status}
       </p>
 
-      {/* PDF */}
-      <iframe
-        src={`http://127.0.0.1:8000/documents/${id}/file`}
-        className="w-full h-[600px] border rounded"
-        title="Document PDF"
-      />
 
-      {/* Send for Signature */}
+      {/* =====================================================
+          PDF PREVIEW
+      ===================================================== */}
+
+      <div className="mb-6">
+
+        <h2 className="text-lg font-semibold mb-2">
+          Document Preview
+        </h2>
+
+        {pdfUrl ? (
+
+          <iframe
+            src={pdfUrl}
+            className="w-full h-[600px] border rounded"
+            title="Document PDF"
+          />
+
+        ) : (
+
+          <div className="w-full h-[600px] border rounded flex items-center justify-center">
+
+            <p className="text-gray-500">
+              Loading PDF...
+            </p>
+
+          </div>
+
+        )}
+
+      </div>
+
+
+      {/* =====================================================
+          SEND FOR SIGNATURE
+      ===================================================== */}
+
       <div className="mt-8 border rounded-lg p-6">
 
         <h2 className="text-xl font-bold mb-4">
           Send for Signature
         </h2>
 
+
         <form
           onSubmit={handleSendForSignature}
           className="flex flex-col gap-4"
         >
 
+          {/* SIGNER EMAIL */}
+
           <input
             type="email"
             value={signerEmail}
-            onChange={(e) => setSignerEmail(e.target.value)}
+            onChange={(e) =>
+              setSignerEmail(
+                e.target.value
+              )
+            }
             placeholder="Enter signer's email"
             required
             className="border p-2 rounded"
           />
+
+
+          {/* SEND BUTTON */}
 
           <button
             type="submit"
@@ -116,8 +324,13 @@ function DocumentDetails() {
 
         </form>
 
-        {/* Signing link */}
+
+        {/* ===================================================
+            SIGNING LINK
+        =================================================== */}
+
         {signingLink && (
+
           <div className="mt-4 p-4 bg-green-50 border border-green-300 rounded">
 
             <p className="font-semibold mb-2">
@@ -129,17 +342,9 @@ function DocumentDetails() {
             </p>
 
           </div>
+
         )}
 
-      </div>
-
-      {/* Signature section */}
-      <div className="mt-8">
-        <h2 className="text-xl font-bold mb-3">
-          Sign Document
-        </h2>
-
-        <SignaturePad />
       </div>
 
     </div>
@@ -147,5 +352,3 @@ function DocumentDetails() {
 }
 
 export default DocumentDetails;
-
-

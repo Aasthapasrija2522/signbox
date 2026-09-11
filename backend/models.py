@@ -19,6 +19,10 @@ class Document(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
+
+    # NEW
+    signed_file_path = Column(String, nullable=True)
+
     status = Column(String, default="Draft")
     owner_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
