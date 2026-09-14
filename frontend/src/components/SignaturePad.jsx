@@ -1,4 +1,3 @@
-
 import {
     forwardRef,
     useImperativeHandle,
@@ -55,6 +54,11 @@ const SignaturePad = forwardRef((props, ref) => {
         ctx.lineJoin = 'round';
 
         ctx.stroke();
+
+        // Tell parent that signature exists
+        if (props.onSignatureChange) {
+            props.onSignatureChange(true);
+        }
     }
 
     // Stop drawing
@@ -75,13 +79,19 @@ const SignaturePad = forwardRef((props, ref) => {
         );
 
         console.log("CANVAS CLEARED");
+
+        // Tell parent signature is empty
+        if (props.onSignatureChange) {
+            props.onSignatureChange(false);
+        }
     }
 
     // Get signature as Base64 PNG
     function getSignatureData() {
         const canvas = canvasRef.current;
 
-        const signatureData = canvas.toDataURL('image/png');
+        const signatureData =
+            canvas.toDataURL('image/png');
 
         console.log("SIGNATURE DATA:");
         console.log(signatureData);
@@ -120,7 +130,7 @@ const SignaturePad = forwardRef((props, ref) => {
         stopDrawing();
     }
 
-    // Expose selected functions to the parent component
+    // Expose selected functions to parent
     useImperativeHandle(ref, () => ({
         getSignatureData,
         clearCanvas
@@ -154,6 +164,7 @@ const SignaturePad = forwardRef((props, ref) => {
             <div className="mt-3 flex gap-3">
 
                 <button
+                    type="button"
                     onClick={clearCanvas}
                     className="px-4 py-2 border border-gray-400 rounded"
                 >
@@ -167,4 +178,3 @@ const SignaturePad = forwardRef((props, ref) => {
 });
 
 export default SignaturePad;
-

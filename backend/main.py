@@ -1,5 +1,12 @@
+from fastapi import (
+    FastAPI,
+    Depends,
+    HTTPException,
+    UploadFile,
+    File,
+    Query
+)
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -70,16 +77,48 @@ def read_root():
 # AUTHENTICATION
 # =========================================================
 
-security = HTTPBearer()
+# auto_error=False is important.
+# It allows us to use either:
+#
+# 1. Authorization header
+# OR
+# 2. token query parameter
+#
+security = HTTPBearer(auto_error=False)
 
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    token: str = Query(None),
     db: Session = Depends(get_db)
 ):
-    token = credentials.credentials
+    # =====================================================
+    # GET TOKEN
+    # =====================================================
 
-    payload = decode_access_token(token)
+    # Normal API requests use:
+    # Authorization: Bearer <token>
+
+    if credentials:
+        token_value = credentials.credentials
+
+    # Download link uses:
+    # ?token=<token>
+
+    elif token:
+        token_value = token
+
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required"
+        )
+
+    # =====================================================
+    # DECODE TOKEN
+    # =====================================================
+
+    payload = decode_access_token(token_value)
 
     if payload is None:
         raise HTTPException(
@@ -87,7 +126,22 @@ def get_current_user(
             detail="Invalid or expired token"
         )
 
-    user_id = int(payload.get("sub"))
+    # =====================================================
+    # GET USER ID
+    # =====================================================
+
+    try:
+        user_id = int(payload.get("sub"))
+
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token"
+        )
+
+    # =====================================================
+    # FIND USER
+    # =====================================================
 
     user = db.query(models.User).filter(
         models.User.id == user_id
@@ -228,6 +282,7 @@ async def upload_document(
     # Give every uploaded file a user-specific filename
     # so different users cannot overwrite files having
     # the same original filename.
+
     safe_filename = f"{current_user.id}_{file.filename}"
 
     file_path = os.path.join(
@@ -600,6 +655,10 @@ def get_signed_file(
     current_user: models.User = Depends(get_current_user)
 ):
 
+    # =====================================================
+    # CHECK DOCUMENT OWNERSHIP
+    # =====================================================
+
     doc = db.query(models.Document).filter(
         models.Document.id == document_id,
         models.Document.owner_id == current_user.id
@@ -610,6 +669,15 @@ def get_signed_file(
             status_code=404,
             detail="Document not found"
         )
+    if doc.status == "Signed":
+        raise HTTPException(
+            status_code=400,
+            detail="Document is already signed"
+    )
+
+    # =====================================================
+    # CHECK SIGNED FILE
+    # =====================================================
 
     if not doc.signed_file_path:
         raise HTTPException(
@@ -617,15 +685,22 @@ def get_signed_file(
             detail="Document has not been signed yet"
         )
 
+    # =====================================================
+    # CHECK FILE EXISTS
+    # =====================================================
+
     if not os.path.exists(doc.signed_file_path):
         raise HTTPException(
             status_code=404,
             detail="Signed PDF file not found"
         )
 
+    # =====================================================
+    # RETURN SIGNED PDF
+    # =====================================================
+
     return FileResponse(
         doc.signed_file_path,
         media_type="application/pdf",
         filename=f"{doc.title}_signed.pdf"
     )
-

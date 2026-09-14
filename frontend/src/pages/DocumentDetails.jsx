@@ -9,6 +9,9 @@ function DocumentDetails() {
   const [document, setDocument] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
 
+  const [error, setError] = useState(null);
+  const [pdfError, setPdfError] = useState(null);
+
   const [signerEmail, setSignerEmail] = useState('');
   const [signingLink, setSigningLink] = useState('');
 
@@ -30,6 +33,8 @@ function DocumentDetails() {
           }
         );
 
+        // fetch() does not automatically throw for 401, 404, 500
+        // So we manually check response.ok
         if (!response.ok) {
           throw new Error(
             `Failed to fetch document: ${response.status}`
@@ -47,6 +52,9 @@ function DocumentDetails() {
           'Error fetching document:',
           error
         );
+
+        // Store error so it can be displayed on the page
+        setError(error.message);
       }
     };
 
@@ -68,6 +76,9 @@ function DocumentDetails() {
 
     const fetchPdf = async () => {
       try {
+
+        // Clear previous PDF error
+        setPdfError(null);
 
         // If document is signed,
         // load the signed PDF.
@@ -126,6 +137,9 @@ function DocumentDetails() {
           'Error loading PDF:',
           error
         );
+
+        // Store PDF-specific error
+        setPdfError(error.message);
       }
     };
 
@@ -211,6 +225,28 @@ function DocumentDetails() {
 
 
   // =========================================================
+  // DOCUMENT ERROR
+  // =========================================================
+
+  // IMPORTANT:
+  // Error check comes BEFORE loading check.
+  //
+  // When an error happens:
+  // document is still null
+  // error contains the error message
+  //
+  // Therefore we must check error first.
+
+  if (error) {
+    return (
+      <p className="text-red-600 text-center mt-20">
+        {error}
+      </p>
+    );
+  }
+
+
+  // =========================================================
   // LOADING DOCUMENT
   // =========================================================
 
@@ -246,6 +282,14 @@ function DocumentDetails() {
       <p className="text-gray-500 mb-4">
         Status: {document.status}
       </p>
+      {document.status === 'Signed' && (
+        <a
+          href={`http://127.0.0.1:8000/documents/${id}/signed-file?token=${localStorage.getItem('token')}`}
+          className="inline-block mt-4 bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+        >
+          Download Signed PDF
+        </a>
+      )}
 
 
       {/* =====================================================
@@ -258,7 +302,23 @@ function DocumentDetails() {
           Document Preview
         </h2>
 
-        {pdfUrl ? (
+
+        {/* PDF ERROR */}
+
+        {pdfError ? (
+
+          <div className="w-full h-[600px] border rounded flex items-center justify-center">
+
+            <p className="text-red-600 text-center px-4">
+              {pdfError}
+            </p>
+
+          </div>
+
+
+        ) : pdfUrl ? (
+
+          /* PDF LOADED */
 
           <iframe
             src={pdfUrl}
@@ -266,7 +326,10 @@ function DocumentDetails() {
             title="Document PDF"
           />
 
+
         ) : (
+
+          /* PDF LOADING */
 
           <div className="w-full h-[600px] border rounded flex items-center justify-center">
 
