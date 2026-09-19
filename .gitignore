@@ -9,6 +9,12 @@ frontend/dist/
 
 # Environment secrets
 .env
+backend/.env
+frontend/.env
+
+# SignBox generated/uploaded files
+backend/uploads/
+backend/signed/
 
 # OS
 .DS_Store
